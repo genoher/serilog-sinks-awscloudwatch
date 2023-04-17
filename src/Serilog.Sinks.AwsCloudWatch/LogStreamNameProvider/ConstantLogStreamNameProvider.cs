@@ -12,6 +12,7 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// The prefix
         /// </summary>
         private readonly string _prefix;
+        private readonly bool _withPrefix;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ConstantLogStreamNameProvider"/> class.
@@ -20,6 +21,7 @@ namespace Serilog.Sinks.AwsCloudWatch
         public ConstantLogStreamNameProvider(string prefix)
         {
             _prefix = prefix ?? string.Empty;
+            _withPrefix = !string.IsNullOrWhiteSpace(prefix);
         }
 
         /// <summary>
@@ -28,7 +30,9 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// <returns></returns>
         public string GetLogStreamName()
         {
-            return $"{_prefix}_{Guid.NewGuid()}";
+            return _withPrefix 
+                ? $"{_prefix}_{Guid.NewGuid()}" 
+                : Guid.NewGuid().ToString();
         }
     }
 }

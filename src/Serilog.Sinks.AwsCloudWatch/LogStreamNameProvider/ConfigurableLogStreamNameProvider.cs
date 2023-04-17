@@ -45,12 +45,17 @@ namespace Serilog.Sinks.AwsCloudWatch.LogStreamNameProvider
 			this.appendUniqueInstanceGuid = appendUniqueInstanceGuid;
 		}
 
-		/// <inheritdoc cref="ILogStreamNameProvider"/>
-		public string GetLogStreamName()
+        /// <summary>
+        /// Gets the log stream name.
+        /// </summary>
+        /// <returns></returns>
+        /// <inheritdoc cref="ILogStreamNameProvider" />
+        public string GetLogStreamName()
 		{
-			if (String.IsNullOrEmpty(streamName))
+			if (string.IsNullOrEmpty(streamName))
 			{
 				var sb = new StringBuilder(logStreamPrefix);
+
 				if (appendHostName)
 				{
 					var instanceName = Dns.GetHostName();
