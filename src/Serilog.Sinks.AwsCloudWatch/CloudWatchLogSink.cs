@@ -1,5 +1,6 @@
 using Amazon.CloudWatchLogs;
 using Amazon.CloudWatchLogs.Model;
+using Serilog.Core;
 using Serilog.Events;
 using Serilog.Formatting;
 using Serilog.Sinks.PeriodicBatching;
@@ -16,8 +17,9 @@ namespace Serilog.Sinks.AwsCloudWatch
     /// <summary>
     /// A Serilog log sink that publishes to AWS CloudWatch Logs
     /// </summary>
-    /// <seealso cref="Serilog.Sinks.PeriodicBatching.PeriodicBatchingSink" />
-    public class CloudWatchLogSink : PeriodicBatchingSink
+    /// <seealso cref="Serilog.Sinks.PeriodicBatching.IBatchedLogEventSink" />
+    /// <seealso cref="Serilog.Core.ILogEventSink" />
+    public class CloudWatchLogSink : IBatchedLogEventSink, ILogEventSink
     {
         /// <summary>
         /// The maximum log event size = 256 KB - 26 B
@@ -56,23 +58,26 @@ namespace Serilog.Sinks.AwsCloudWatch
         private string nextSequenceToken;
         private readonly ITextFormatter textFormatter;
 
-        private readonly SemaphoreSlim syncObject = new SemaphoreSlim(1);
+        private readonly SemaphoreSlim syncObject = new(1);
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="CloudWatchLogSink"/> class.
+        /// Initializes a new instance of the <see cref="CloudWatchLogSink" /> class.
         /// </summary>
         /// <param name="cloudWatchClient">The cloud watch client.</param>
         /// <param name="options">The options.</param>
-        public CloudWatchLogSink(IAmazonCloudWatchLogs cloudWatchClient, ICloudWatchSinkOptions options) : base(options.BatchSizeLimit, options.Period, options.QueueSizeLimit)
+        /// <exception cref="System.ArgumentException"></exception>
+        public CloudWatchLogSink(IAmazonCloudWatchLogs cloudWatchClient, ICloudWatchSinkOptions options)           
         {
             if (string.IsNullOrEmpty(options?.LogGroupName))
             {
                 throw new ArgumentException($"{nameof(ICloudWatchSinkOptions)}.{nameof(options.LogGroupName)} must be specified.");
             }
+
             if (options.BatchSizeLimit < 1)
             {
                 throw new ArgumentException($"{nameof(ICloudWatchSinkOptions)}.{nameof(options.BatchSizeLimit)} must be a value greater than 0.");
             }
+
             this.cloudWatchClient = cloudWatchClient;
             this.options = options;
 
@@ -107,7 +112,6 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// <summary>
         /// Creates the log group.
         /// </summary>
-        /// <exception cref="Serilog.Sinks.AwsCloudWatch.AwsCloudWatchSinkException"></exception>
         private async Task CreateLogGroupAsync()
         {
             if (options.CreateLogGroup)
@@ -129,7 +133,7 @@ namespace Serilog.Sinks.AwsCloudWatch
                 if (logGroup == null)
                 {
                     var createRequest = new CreateLogGroupRequest(options.LogGroupName);
-                    var createResponse = await cloudWatchClient.CreateLogGroupAsync(createRequest);
+                    _ = await cloudWatchClient.CreateLogGroupAsync(createRequest);
 
                     // update the retention policy if a specific period is defined
                     if (options.LogGroupRetentionPolicy != LogGroupRetentionPolicy.Indefinitely)
@@ -153,7 +157,6 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// <summary>
         /// Creates the log stream if needed.
         /// </summary>
-        /// <exception cref="Serilog.Sinks.AwsCloudWatch.AwsCloudWatchSinkException"></exception>
         private async Task CreateLogStreamAsync()
         {
             // see if the log stream already exists
@@ -167,7 +170,8 @@ namespace Serilog.Sinks.AwsCloudWatch
                     LogGroupName = options.LogGroupName,
                     LogStreamName = logStreamName
                 };
-                var createLogStreamResponse = await cloudWatchClient.CreateLogStreamAsync(createLogStreamRequest);
+
+                _ = await cloudWatchClient.CreateLogStreamAsync(createLogStreamRequest);
             }
             else
             {
@@ -178,7 +182,6 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// <summary>
         /// Updates the log stream sequence token.
         /// </summary>
-        /// <exception cref="Serilog.Sinks.AwsCloudWatch.AwsCloudWatchSinkException"></exception>
         private async Task UpdateLogStreamSequenceTokenAsync()
         {
             var logStream = await GetLogStreamAsync();
@@ -210,7 +213,7 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// </summary>
         /// <param name="logEvents">The entire set of log events.</param>
         /// <returns>A batch of events meeting defined restrictions.</returns>
-        private List<InputLogEvent> CreateBatch(Queue<InputLogEvent> logEvents)
+        private static List<InputLogEvent> CreateBatch(Queue<InputLogEvent> logEvents)
         {
             DateTime? first = null;
             var batchSize = 0;
@@ -340,14 +343,14 @@ namespace Serilog.Sinks.AwsCloudWatch
         /// <summary>
         /// Emit a batch of log events, running asynchronously.
         /// </summary>
-        /// <param name="events">The events to emit.</param>
-        protected override async Task EmitBatchAsync(IEnumerable<LogEvent> events)
+        /// <param name="batch">The events to emit.</param>
+        public async Task EmitBatchAsync(IEnumerable<LogEvent> batch)
         {
             try
             {
                 await syncObject.WaitAsync();
 
-                if (events?.Count() == 0)
+                if (batch?.Count() == 0)
                 {
                     return;
                 }
@@ -365,7 +368,7 @@ namespace Serilog.Sinks.AwsCloudWatch
                 try
                 {
                     var logEvents =
-                        new Queue<InputLogEvent>(events
+                        new Queue<InputLogEvent>(batch
                             .OrderBy(e => e.Timestamp) // log events need to be ordered by timestamp within a single bulk upload to CloudWatch
                             .Select( // transform
                                 @event =>
@@ -394,9 +397,9 @@ namespace Serilog.Sinks.AwsCloudWatch
 
                     while (logEvents.Count > 0)
                     {
-                        var batch = CreateBatch(logEvents);
+                        var batchList = CreateBatch(logEvents);
 
-                        await PublishBatchAsync(batch);
+                        await PublishBatchAsync(batchList);
                     }
                 }
                 catch (Exception ex)
@@ -415,6 +418,25 @@ namespace Serilog.Sinks.AwsCloudWatch
             {
                 syncObject.Release();
             }
+        }
+
+        /// <summary>
+        /// Allows sinks to perform periodic work without requiring additional threads
+        /// or timers (thus avoiding additional flush/shut-down complexity).
+        /// </summary>
+        /// <exception cref="System.NotImplementedException"></exception>
+        public async Task OnEmptyBatchAsync()
+        {
+            await Task.Delay(0);
+        }
+
+        /// <summary>
+        /// Emit the provided log event to the sink.
+        /// </summary>
+        /// <param name="logEvent">The log event to write.</param>
+        public void Emit(LogEvent logEvent)
+        {
+            Task.Run(() => this.EmitBatchAsync(new[] { logEvent }));            
         }
     }
 }

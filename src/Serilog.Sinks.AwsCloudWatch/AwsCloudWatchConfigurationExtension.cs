@@ -174,10 +174,10 @@ namespace Serilog.Sinks.AwsCloudWatch
 				TextFormatter = textFormatter ?? new JsonFormatter()
 			};
 
-			if (options == null)
-			{
-				throw new ArgumentNullException(nameof(options));
-			}
+			////if (options == null)
+			////{
+			////	throw new ArgumentNullException(nameof(options));
+			////}
 
 			var client = cloudWatchClient ?? new AmazonCloudWatchLogsClient();
 			

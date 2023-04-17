@@ -925,7 +925,7 @@ namespace Serilog.Sinks.AwsCloudWatch.Tests
         /// </summary>
         /// <param name="size">The size of the message.</param>
         /// <returns>A string consisting of random characters from the alphabet.</returns>
-        private string CreateMessage(int size)
+        private static string CreateMessage(int size)
         {
             var message = new string(Enumerable.Range(0, size).Select(_ => Alphabet[random.Next(0, Alphabet.Length)]).ToArray());
             Assert.Equal(size, message.Length);
